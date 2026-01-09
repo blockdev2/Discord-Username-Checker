@@ -1,0 +1,11 @@
+data/
+logs/
+results/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
