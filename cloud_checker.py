@@ -471,12 +471,6 @@ async def mn():
     os.system('cls' if os.name == 'nt' else 'clear')
     
     if cfg.get("timeout") is None:
-        ask_webhook = input(f"Send hits to webhook [y/n] {Clr.YELLOW}>>>{Clr.ENDC} ").lower()
-        if ask_webhook in ["y", "yes", "1"]:
-            webhook = input(f"Webhook URL {Clr.YELLOW}>>>{Clr.ENDC} ")
-            cfg.set("webhook", webhook)
-            message = input(f"Message template {Clr.YELLOW}>>>{Clr.ENDC} ")
-            cfg.set("message", message)
         cfg.set("timeout", 5)
     
     print(f"\n{Clr.CYAN}[?]{Clr.ENDC} Check mode:")
