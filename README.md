@@ -25,7 +25,7 @@ pip install aiohttp
 
 1. Run the script:
 ```bash
-python cloud_checker.py
+python main.py
 ```
 
 2. Choose check mode:
