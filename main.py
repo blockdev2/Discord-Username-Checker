@@ -68,11 +68,12 @@ class St:
     def __init__(self):
         self.reset()
     
-    def reset(self):
-        self.requests = 0
-        self.hits = 0
-        self.taken = 0
-        self.errors = 0
+    def reset(self, reset_stats=True):
+        if reset_stats:
+            self.requests = 0
+            self.hits = 0
+            self.taken = 0
+            self.errors = 0
         self.rps = 0
         self.last_requests = 0
         self.last_activity = time()
@@ -118,6 +119,18 @@ def clr_prg():
         Path("data/progress.txt").unlink()
     except:
         pass
+
+def fmt_prx(proxy):
+    if not proxy:
+        return None
+    proxy = proxy.strip()
+    if proxy.startswith("http://") or proxy.startswith("https://"):
+        return proxy
+    parts = proxy.split(":")
+    if len(parts) == 4:
+        host, port, user, password = parts
+        return f"http://{user}:{password}@{host}:{port}"
+    return f"http://{proxy}"
 
 async def dl_og(lengths: list = None):
     og_words = set()
@@ -168,10 +181,9 @@ async def gen_cmb(lengths: list, letters_only: bool = False, og_mode: bool = Fal
         combos = await gen_og(lengths)
         print(f"{Clr.GREEN}[+]{Clr.ENDC} Generated {len(combos)} OG words")
         
+        random.shuffle(combos)
         combos_file = Path("data/names_to_check.txt")
         combos_file.write_text("\n".join(combos))
-        
-        random.shuffle(combos)
         print(f"{Clr.GREEN}[+]{Clr.ENDC} Shuffled {len(combos)} OG usernames (random order)")
         
         if lengths is None:
@@ -197,6 +209,7 @@ async def gen_cmb(lengths: list, letters_only: bool = False, og_mode: bool = Fal
     combos_file = Path("data/names_to_check.txt")
     combos = combos_file.read_text().strip().splitlines()
     combos = [c.strip() for c in combos if c.strip()]
+    loaded_combos = bool(combos)
     
     if combos:
         combos = [c for c in combos if len(c) in lengths]
@@ -212,12 +225,13 @@ async def gen_cmb(lengths: list, letters_only: bool = False, og_mode: bool = Fal
             for combo in itertools.product(CHARS, repeat=length):
                 all_combos.append("".join(combo))
         
-        combos_file.write_text("\n".join(all_combos))
         combos = all_combos
+        random.shuffle(combos)
+        combos_file.write_text("\n".join(combos))
         print(f"{Clr.GREEN}[+]{Clr.ENDC} Generated {len(combos)} combinations")
-    
-    random.shuffle(combos)
-    print(f"{Clr.GREEN}[+]{Clr.ENDC} Shuffled {len(combos)} usernames (random order)")
+        print(f"{Clr.GREEN}[+]{Clr.ENDC} Shuffled {len(combos)} usernames (random order)")
+    elif loaded_combos:
+        print(f"{Clr.GREEN}[+]{Clr.ENDC} Loaded {len(combos)} usernames from data/names_to_check.txt")
     
     for length in lengths:
         count = len([c for c in combos if len(c) == length])
@@ -250,7 +264,11 @@ class Chk:
         
         proxies = ld_prx()
         self.proxy_cycle = itertools.cycle(proxies)
-        print(f"{Clr.GREEN}[+]{Clr.ENDC} Session created with {len(proxies)} proxies")
+        proxy_count = len([p for p in proxies if p])
+        if proxy_count:
+            print(f"{Clr.GREEN}[+]{Clr.ENDC} Session created with {proxy_count} proxies")
+        else:
+            print(f"{Clr.GREEN}[+]{Clr.ENDC} Session created without proxies")
     
     async def get_proxy(self):
         async with self.proxy_lock:
@@ -265,13 +283,14 @@ class Chk:
     
     async def check(self, username: str) -> tuple:
         max_retries = 3
+        last_error = "unknown error"
         
         for attempt in range(max_retries):
             if not st.running:
                 return (None, {})
             
             proxy = await self.get_proxy()
-            proxy_url = f"http://{proxy}" if proxy else None
+            proxy_url = fmt_prx(proxy)
             
             try:
                 async def do_request():
@@ -295,14 +314,17 @@ class Chk:
                                 st.hits += 1
                                 return (True, data)
                             else:
+                                last_error = "invalid response"
                                 return (None, {})
                         
                         elif resp.status == 429:
                             tch()
+                            last_error = "rate limited 429"
                             await asyncio.sleep(0.5)
                             return (None, {})
                         else:
                             tch()
+                            last_error = f"status {resp.status}"
                             return (None, {})
                 
                 result = await asyncio.wait_for(do_request(), timeout=6)
@@ -312,13 +334,17 @@ class Chk:
                             
             except asyncio.TimeoutError:
                 tch()
+                last_error = "timeout"
+                lg(f"Check error {username} via {proxy_url or 'direct'} attempt {attempt + 1}: {last_error}")
                 continue
             except Exception as e:
                 tch()
+                last_error = str(e)[:80] or e.__class__.__name__
+                lg(f"Check error {username} via {proxy_url or 'direct'} attempt {attempt + 1}: {last_error}")
                 continue
         
         st.errors += 1
-        return (None, {})
+        return (None, {"error": last_error})
 
 chk = Chk()
 
@@ -337,9 +363,6 @@ async def wrk(combos: list, worker_id: int):
             tch()
             
             username = combos[idx]
-            
-            if idx % 50 == 0:
-                sv_prg(idx)
             
             try:
                 result = await asyncio.wait_for(
@@ -362,6 +385,8 @@ async def wrk(combos: list, worker_id: int):
                     print(f"[{Clr.RED}-{Clr.ENDC}]   Taken  : {Clr.CYAN}{username}{Clr.ENDC} | RPS: {st.rps}")
                     consecutive_fails = 0
                 else:
+                    reason = resp.get("error", "unknown error") if isinstance(resp, dict) else "unknown error"
+                    print(f"[{Clr.YELLOW}!{Clr.ENDC}] Error  : {Clr.CYAN}{username}{Clr.ENDC} | {reason} | RPS: {st.rps}")
                     consecutive_fails += 1
                     if consecutive_fails > 10:
                         await asyncio.sleep(1)
@@ -375,6 +400,9 @@ async def wrk(combos: list, worker_id: int):
                 tch()
                 lg(f"Worker {worker_id} error: {str(e)[:50]}")
                 consecutive_fails += 1
+            
+            if (idx + 1) % 50 == 0 or idx + 1 >= len(combos):
+                sv_prg(idx + 1)
             
             await asyncio.sleep(0.01)
     
@@ -432,7 +460,7 @@ async def tt_upd(total: int):
             await asyncio.sleep(2)
 
 async def run_chk(combos: list, num_workers: int, start_index: int):
-    st.reset()
+    st.reset(reset_stats=False)
     st.current_index = start_index
     
     print(f"\n{Clr.GREEN}[+]{Clr.ENDC} Starting from index {start_index}")
@@ -465,7 +493,7 @@ async def run_chk(combos: list, num_workers: int, start_index: int):
     
     await chk.close()
     
-    return st.should_restart, st.current_index
+    return st.should_restart, max(start_index, st.current_index - num_workers)
 
 async def mn():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -513,9 +541,9 @@ async def mn():
         combos = await gen_cmb(lengths, letters_only=False, og_mode=True)
     else:
         print(f"\n{Clr.CYAN}[?]{Clr.ENDC} Which username lengths to check?")
-        print(f"  1) 3 digits only")
-        print(f"  2) 4 digits only")
-        print(f"  3) Both 3 and 4 digits")
+        print(f"  1) 3 characters only")
+        print(f"  2) 4 characters only")
+        print(f"  3) Both 3 and 4 characters")
         choice = input(f"Choice [1/2/3] {Clr.YELLOW}>>>{Clr.ENDC} ").strip()
         
         if choice == "1":
@@ -596,5 +624,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(mn())
     except KeyboardInterrupt:
+        sv_prg(st.current_index)
         print(f"\n{Clr.YELLOW}[!]{Clr.ENDC} Interrupted - progress saved")
         sys.exit(0)
